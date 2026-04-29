@@ -1,0 +1,5 @@
+# Optional operator-provided reason for audit trail
+string reason
+---
+bool success
+string message

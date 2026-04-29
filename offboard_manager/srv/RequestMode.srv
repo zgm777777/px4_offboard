@@ -1,0 +1,5 @@
+# Request entering OFFBOARD mode.
+# This service intentionally has no payload.
+---
+bool success
+string message

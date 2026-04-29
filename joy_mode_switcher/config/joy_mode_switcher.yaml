@@ -1,0 +1,39 @@
+joy_mode_switcher:
+  ros__parameters:
+    topic_joy: /joy
+    topic_velocity_cmd: /input/velocity_cmd
+    velocity_cmd_frame_id: map
+    services:
+      request_mode: /offboard/request_mode
+      request_arm: /offboard/request_arm
+      emergency_disarm: /offboard/emergency_disarm
+      request_takeoff: /offboard/request_takeoff
+    buttons:
+      mode: 0
+      arm: 1
+      disarm: 2
+      emergency: 11
+      takeoff: 3
+      deadman: 5
+    axes:
+      vx: 4
+      vy: 3
+      vz: 1
+      yaw_rate: 0
+    limits:
+      max_vx_mps: 2.0
+      max_vy_mps: 2.0
+      max_vz_mps: 1.0
+      max_yaw_rate_radps: 1.2
+    invert:
+      vx: false
+      vy: false
+      vz: false
+      yaw_rate: false
+    require_deadman: true
+    publish_hz: 30.0
+    joy_timeout_sec: 0.5
+    deadzone: 0.10
+    takeoff_altitude: 5.0
+    min_trigger_interval_sec: 0.25
+    emergency_reason: joy_button

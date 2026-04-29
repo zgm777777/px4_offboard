@@ -1,0 +1,4 @@
+float32 altitude   # target climb distance from current local position [m]
+---
+bool success
+string message
