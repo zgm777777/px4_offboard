@@ -16,8 +16,8 @@ joy_mode_switcher:
       takeoff: 3
       deadman: 5
     axes:
-      vx: 4
-      vy: 3
+      vx: 3
+      vy: 4
       vz: 1
       yaw_rate: 0
     limits:
@@ -26,7 +26,7 @@ joy_mode_switcher:
       max_vz_mps: 1.0
       max_yaw_rate_radps: 1.2
     invert:
-      vx: false
+      vx: true
       vy: false
       vz: false
       yaw_rate: false
