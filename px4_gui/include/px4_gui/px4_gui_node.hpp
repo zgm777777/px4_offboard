@@ -55,8 +55,10 @@ private:
   void onFlightState(const std_msgs::msg::String::SharedPtr msg);
   void onAlert(const std_msgs::msg::String::SharedPtr msg);
   void onControlEnable(const std_msgs::msg::Bool::SharedPtr msg);
+  void onActiveSource(const std_msgs::msg::String::SharedPtr msg);
 
   void publishVelocity();
+  void publishSourceCmd(const std::string & source);
 
   std::string navStateString(uint8_t nav_state) const;
   std::string armingStateString(uint8_t arming_state) const;
@@ -79,13 +81,16 @@ private:
   rclcpp::Subscription<std_msgs::msg::String>::SharedPtr flight_state_sub_;
   rclcpp::Subscription<std_msgs::msg::String>::SharedPtr alert_sub_;
   rclcpp::Subscription<std_msgs::msg::Bool>::SharedPtr control_enable_sub_;
+  rclcpp::Subscription<std_msgs::msg::String>::SharedPtr active_source_sub_;
 
   rclcpp::Publisher<geometry_msgs::msg::TwistStamped>::SharedPtr velocity_pub_;
+  rclcpp::Publisher<std_msgs::msg::String>::SharedPtr source_cmd_pub_;
 
   // State
   std::mutex state_mutex_;
   std::string flight_state_str_{"--"};
   std::string alert_str_{"--"};
+  std::string active_source_str_{"--"};
   bool control_enable_ = false;
   uint8_t nav_state_ = 0;
   uint8_t arming_state_ = 0;
@@ -98,6 +103,11 @@ private:
   QPushButton *btn_disarm_;
   QPushButton *btn_takeoff_;
   QPushButton *btn_emergency_;
+
+  QPushButton *btn_src_hold_;
+  QPushButton *btn_src_gui_;
+  QPushButton *btn_src_joy_;
+  QPushButton *btn_src_aruco_;
 
   QSlider *slider_vx_;
   QSlider *slider_vy_;
@@ -115,6 +125,7 @@ private:
   QLabel *label_landed_;
   QLabel *label_alert_;
   QLabel *label_control_enable_;
+  QLabel *label_active_source_;
 
   QDoubleSpinBox *spin_takeoff_alt_;
 
@@ -122,6 +133,7 @@ private:
   int log_line_count_ = 0;
 
   // Parameters
+  std::string velocity_cmd_topic_;
   double max_vx_{2.0};
   double max_vy_{2.0};
   double max_vz_{1.0};

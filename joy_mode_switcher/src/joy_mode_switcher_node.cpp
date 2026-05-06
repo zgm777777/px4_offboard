@@ -21,7 +21,7 @@ public:
   : Node("joy_mode_switcher")
   {
     topic_joy_ = declare_parameter<std::string>("topic_joy", "/joy");
-    topic_velocity_cmd_ = declare_parameter<std::string>("topic_velocity_cmd", "/input/velocity_cmd");
+    topic_velocity_cmd_ = declare_parameter<std::string>("topic_velocity_cmd", "/joy/velocity_cmd");
     velocity_cmd_frame_id_ = declare_parameter<std::string>("velocity_cmd_frame_id", "map");
 
     service_request_mode_ = declare_parameter<std::string>(

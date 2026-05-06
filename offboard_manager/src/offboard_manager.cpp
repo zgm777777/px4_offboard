@@ -138,7 +138,7 @@ void OffboardManager::load_parameters()
   takeoff_reached_tolerance_m_ = declare_parameter<double>("takeoff_reached_tolerance_m", 0.2);
   debounce_frames_ = declare_parameter<int>("debounce_frames", 2);
   allow_ground_control_while_landed_ = declare_parameter<bool>(
-    "allow_ground_control_while_landed", true);
+    "allow_ground_control_while_landed", false); //是否允许无人机在降落时直接速度控制起飞 false代表只能takeoff起飞
 
   target_system_ = declare_parameter<int>("target_system", 1);
   target_component_ = declare_parameter<int>("target_component", 1);
@@ -222,19 +222,34 @@ void OffboardManager::state_machine_timer_cb()
     const bool timeout = (now - takeoff_started_at_).seconds() > takeoff_timeout_sec_;
     const bool reached_target = has_local_position_ &&
       (latest_local_position_.z <= (takeoff_target_z_ned_ + static_cast<float>(takeoff_reached_tolerance_m_)));
+    const bool airborne = has_land_detected_ && !landed_;
+    const double relaxed_tolerance = takeoff_reached_tolerance_m_ + 0.3;
+    const bool close_enough_airborne = airborne && has_local_position_ &&
+      (latest_local_position_.z <= (takeoff_target_z_ned_ + static_cast<float>(relaxed_tolerance)));
+
     if (!is_armed_confirmed()) {
       takeoff_active_ = false;
       publish_alert("WARN", "Takeoff override canceled: vehicle no longer armed.");
-    } else if (timeout) {
+    } else if (reached_target || close_enough_airborne) {
       takeoff_active_ = false;
-      publish_alert("WARN", "Takeoff override timeout; fallback to velocity control gate.");
-    } else if (reached_target) {
-      takeoff_active_ = false;
+      const char * finish_reason = reached_target ? "reached_target" : "close_enough_airborne";
       RCLCPP_INFO(
         get_logger(),
-        "Takeoff override finished: target reached (z=%.2f target=%.2f).",
+        "Takeoff override finished: %s (z=%.2f target=%.2f landed=%s).",
+        finish_reason,
         latest_local_position_.z,
-        takeoff_target_z_ned_);
+        takeoff_target_z_ned_,
+        landed_ ? "true" : "false");
+    } else if (timeout) {
+      takeoff_active_ = false;
+      if (!landed_) {
+        publish_alert("WARN",
+          "Takeoff timeout but vehicle is airborne; ending takeoff override. "
+          "Velocity control will be gated by control_enable logic.");
+      } else {
+        publish_alert("WARN",
+          "Takeoff timeout while still landed; velocity control remains gated.");
+      }
     }
   }
 
@@ -258,6 +273,27 @@ void OffboardManager::state_machine_timer_cb()
 
   if (emergency_flag_ && state_ != ManagerState::EMERGENCY) {
     transition_to(ManagerState::EMERGENCY, "emergency_latched");
+  }
+
+  // Sync with PX4 auto-disarm: if PX4 disarmed externally while we are
+  // in an active control state, close the gate and fall back to IDLE.
+  // WAITING_ARM is intentionally excluded — being disarmed during
+  // WAITING_ARM is the normal expected state.
+  if (is_disarmed_confirmed()) {
+    const bool in_active_chain =
+      (state_ == ManagerState::ACTIVE) ||
+      (state_ == ManagerState::LANDING) ||
+      (state_ == ManagerState::EXITED);
+
+    const bool no_pending_arm = !pending_arm_request_.active;
+
+    if (in_active_chain && no_pending_arm) {
+      takeoff_active_ = false;
+      transition_to(ManagerState::IDLE, "px4_auto_disarmed");
+      publish_takeoff_override();
+      publish_control_enable();
+      publish_alert("WARN", "PX4 disarmed externally or automatically; closing offboard control gate.");
+    }
   }
 
   if (pending_mode_request_.active) {
@@ -303,8 +339,6 @@ void OffboardManager::state_machine_timer_cb()
     case ManagerState::ACTIVE:
       if (emergency_flag_) {
         transition_to(ManagerState::EMERGENCY, "emergency_latched");
-      } else if (landed_ && !allow_ground_control_while_landed_) {
-        transition_to(ManagerState::LANDING, "land_detected");
       } else if (offboard_lost_frames_ >= debounce_frames_) {
         transition_to(ManagerState::EXITED, "offboard_lost");
         publish_alert("WARN", "Vehicle exited OFFBOARD mode.");
@@ -385,6 +419,13 @@ void OffboardManager::publish_control_enable()
   const bool landed_gate_ok = allow_ground_control_while_landed_ || (!landed_);
   msg.data = (state_ == ManagerState::ACTIVE) && landed_gate_ok && (!emergency_flag_);
   control_enable_pub_->publish(msg);
+
+  if ((state_ == ManagerState::ACTIVE) && (!emergency_flag_) && landed_ && !allow_ground_control_while_landed_) {
+    RCLCPP_INFO_THROTTLE(
+      get_logger(), *get_clock(), 5000,
+      "Vehicle armed and ACTIVE, but velocity control is gated because vehicle is landed.");
+  }
+
   RCLCPP_DEBUG(get_logger(), "Published control_enable=%s", msg.data ? "true" : "false");
 }
 
@@ -507,6 +548,15 @@ void OffboardManager::send_takeoff_command(float altitude)
   takeoff_target_z_ned_ = latest_local_position_.z - altitude;
   takeoff_started_at_ = get_clock()->now();
   takeoff_active_ = true;
+
+  RCLCPP_INFO(
+    get_logger(),
+    "Takeoff started: current_z=%.2f target_z=%.2f altitude=%.2fm hold=(%.2f, %.2f)",
+    latest_local_position_.z,
+    takeoff_target_z_ned_,
+    altitude,
+    takeoff_hold_x_ned_,
+    takeoff_hold_y_ned_);
 }
 
 void OffboardManager::send_vehicle_command(
@@ -712,12 +762,16 @@ void OffboardManager::on_request_takeoff(
     return;
   }
 
-  if ((state_ != ManagerState::WAITING_ARM) &&
-    (state_ != ManagerState::ACTIVE) &&
-    (!is_armed_confirmed()))
-  {
+  if (!is_armed_confirmed()) {
     resp.success = false;
-    resp.message = "request_takeoff rejected: vehicle is not armed and not in WAITING_ARM/ACTIVE.";
+    resp.message = "request_takeoff rejected: vehicle is not armed.";
+    service->send_response(*request_header, resp);
+    return;
+  }
+
+  if (state_ != ManagerState::ACTIVE) {
+    resp.success = false;
+    resp.message = "request_takeoff rejected: offboard_manager is not ACTIVE.";
     service->send_response(*request_header, resp);
     return;
   }

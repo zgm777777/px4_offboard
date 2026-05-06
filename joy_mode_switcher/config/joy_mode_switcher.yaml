@@ -1,7 +1,7 @@
 joy_mode_switcher:
   ros__parameters:
     topic_joy: /joy
-    topic_velocity_cmd: /input/velocity_cmd
+    topic_velocity_cmd: /joy/velocity_cmd
     velocity_cmd_frame_id: map
     services:
       request_mode: /offboard/request_mode

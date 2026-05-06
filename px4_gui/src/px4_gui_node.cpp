@@ -100,6 +100,37 @@ void PX4GuiNode::setupUi()
   mode_box->setLayout(mode_layout);
 
   left_panel->addWidget(mode_box);
+
+  // ---- Source selection ----
+  auto *src_box = new QGroupBox("Control Source");
+  auto *src_layout = new QVBoxLayout();
+
+  auto make_src_btn = [](const QString & text, const QString & color, const QString & textColor) {
+    auto *btn = new QPushButton(text);
+    btn->setMinimumHeight(34);
+    btn->setStyleSheet(
+      QString("background-color: %1; color: %2; font-weight: bold; font-size: 12px;")
+        .arg(color, textColor));
+    return btn;
+  };
+
+  btn_src_hold_  = make_src_btn("HOLD",  "#616161", "white");
+  btn_src_gui_   = make_src_btn("GUI",   "#6a1b9a", "white");
+  btn_src_joy_   = make_src_btn("JOY",   "#e65100", "white");
+  btn_src_aruco_ = make_src_btn("ArUco", "#1565c0", "white");
+
+  connect(btn_src_hold_,  &QPushButton::clicked, this, [this]() { publishSourceCmd("hold"); });
+  connect(btn_src_gui_,   &QPushButton::clicked, this, [this]() { publishSourceCmd("gui"); });
+  connect(btn_src_joy_,   &QPushButton::clicked, this, [this]() { publishSourceCmd("joy"); });
+  connect(btn_src_aruco_, &QPushButton::clicked, this, [this]() { publishSourceCmd("aruco"); });
+
+  src_layout->addWidget(btn_src_hold_);
+  src_layout->addWidget(btn_src_gui_);
+  src_layout->addWidget(btn_src_joy_);
+  src_layout->addWidget(btn_src_aruco_);
+  src_box->setLayout(src_layout);
+
+  left_panel->addWidget(src_box);
   left_panel->addStretch();
 
   // ---- Center panel: Velocity control ----
@@ -196,7 +227,8 @@ void PX4GuiNode::setupUi()
   add_status_row("Nav Mode:", label_nav_mode_, 2);
   add_status_row("Landed:", label_landed_, 3);
   add_status_row("Control Enable:", label_control_enable_, 4);
-  add_status_row("Alert:", label_alert_, 5);
+  add_status_row("Vel Source:", label_active_source_, 5);
+  add_status_row("Alert:", label_alert_, 6);
 
   status_box->setLayout(status_layout);
   right_panel->addWidget(status_box);
@@ -230,6 +262,14 @@ void PX4GuiNode::setupRos()
   rclcpp::NodeOptions opts;
   opts.use_intra_process_comms(false);
   ros_node_ = std::make_shared<rclcpp::Node>("px4_gui", opts);
+
+  // Parameters
+  velocity_cmd_topic_ = ros_node_->declare_parameter<std::string>(
+    "velocity_cmd_topic", "/gui/velocity_cmd");
+  max_vx_ = ros_node_->declare_parameter<double>("max_vx", 2.0);
+  max_vy_ = ros_node_->declare_parameter<double>("max_vy", 2.0);
+  max_vz_ = ros_node_->declare_parameter<double>("max_vz", 1.0);
+  max_yaw_ = ros_node_->declare_parameter<double>("max_yaw", 1.2);
 
   const auto qos = rclcpp::QoS(10).best_effort().durability_volatile();
 
@@ -268,8 +308,17 @@ void PX4GuiNode::setupRos()
       onControlEnable(msg);
     });
 
+  active_source_sub_ = ros_node_->create_subscription<std_msgs::msg::String>(
+    "/control_mux/active_source", qos,
+    [this](const std_msgs::msg::String::SharedPtr msg) {
+      onActiveSource(msg);
+    });
+
   velocity_pub_ = ros_node_->create_publisher<geometry_msgs::msg::TwistStamped>(
-    "/input/velocity_cmd", rclcpp::QoS(10));
+    velocity_cmd_topic_, rclcpp::QoS(10));
+
+  source_cmd_pub_ = ros_node_->create_publisher<std_msgs::msg::String>(
+    "/control_mux/source_cmd", rclcpp::QoS(10));
 }
 
 // ---------------------------------------------------------------------------
@@ -298,6 +347,19 @@ void PX4GuiNode::publishVelocity()
   msg.twist.angular.z = static_cast<float>(spin_yaw_->value());
 
   velocity_pub_->publish(msg);
+}
+
+// ---------------------------------------------------------------------------
+// Source command publishing
+// ---------------------------------------------------------------------------
+void PX4GuiNode::publishSourceCmd(const std::string & source)
+{
+  if (!source_cmd_pub_) return;
+
+  std_msgs::msg::String msg{};
+  msg.data = source;
+  source_cmd_pub_->publish(msg);
+  logAppend("[SRC] Switched to " + source);
 }
 
 // ---------------------------------------------------------------------------
@@ -419,7 +481,7 @@ void PX4GuiNode::onEmergencyDisarm()
 
 void PX4GuiNode::onRequestTakeoff()
 {
-  if (!arm_client_->service_is_ready()) {
+  if (!takeoff_client_->service_is_ready()) {
     logAppend("[WARN] /offboard/request_takeoff service not available");
     return;
   }
@@ -527,6 +589,39 @@ void PX4GuiNode::onControlEnable(const std_msgs::msg::Bool::SharedPtr msg)
       label_control_enable_->setStyleSheet(
         "background-color: #4a1a1a; color: #ff6666; padding: 4px; border-radius: 3px; font-weight: bold;");
     }
+  });
+}
+
+void PX4GuiNode::onActiveSource(const std_msgs::msg::String::SharedPtr msg)
+{
+  std::string src = msg->data;
+  QMetaObject::invokeMethod(this, [this, src]() {
+    active_source_str_ = src;
+    label_active_source_->setText(QString::fromStdString(src));
+
+    // Color-code by source type
+    QString bg_color;
+    if (src == "aruco") {
+      bg_color = "#1565c0";   // blue
+    } else if (src == "gui") {
+      bg_color = "#6a1b9a";   // purple
+    } else if (src == "joy") {
+      bg_color = "#e65100";   // orange
+    } else if (src == "hold" || src == "HOLD") {
+      bg_color = "#616161";   // grey
+    } else if (src == "EMERGENCY") {
+      bg_color = "#b71c1c";   // dark red
+    } else if (src == "TAKEOFF_OVERRIDE") {
+      bg_color = "#f9a825";   // amber
+    } else if (src == "DISABLED") {
+      bg_color = "#4a1a1a";   // dim red
+    } else {
+      bg_color = "#37474f";   // dark blue-grey
+    }
+
+    label_active_source_->setStyleSheet(
+      QString("background-color: %1; color: white; padding: 4px; border-radius: 3px; font-weight: bold;")
+        .arg(bg_color));
   });
 }
 
